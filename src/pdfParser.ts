@@ -8,6 +8,17 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const VALID_GRADES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'Fx', 'P']);
 
+// Fix text where PDF extracted individual chars: "T e n t a m e n" → "Tentamen"
+function fixSpacedText(text: string): string {
+  // Detect if most "words" are single characters
+  const parts = text.split(/\s+/);
+  const singleChars = parts.filter(p => p.length === 1).length;
+  if (singleChars > parts.length * 0.6 && parts.length > 3) {
+    return parts.join('');
+  }
+  return text;
+}
+
 function normalizeGrade(raw: string): Grade | null {
   const upper = raw.trim().toUpperCase();
   if (upper === 'FX') return 'Fx';
@@ -185,7 +196,7 @@ export async function parsePdf(file: File): Promise<Course[]> {
     const creditsClean = credits.replace(/[()]/g, '').replace(',', '.').replace(/[^\d.]/g, '');
 
     allRows.push({
-      name: name.trim(),
+      name: fixSpacedText(name.trim()),
       credits: parseFloat(creditsClean) || 0,
       grade: normalizedGrade,
       date,
