@@ -9,9 +9,21 @@ import { FileUploader } from './components/FileUploader';
 import { GPASimulator } from './components/GPASimulator';
 import { StudyAdvisor } from './components/StudyAdvisor';
 import { useState } from 'react';
+import { calculateGPA } from './gpaUtils';
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function getFirstName(name: string): string {
+  return name.split(' ')[0];
+}
 
 function App() {
-  const { courses, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty } = useCourses();
+  const { courses, studentName, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty } = useCourses();
   const [showImport, setShowImport] = useState(false);
 
   if (isEmpty && courses.length === 0) {
@@ -64,6 +76,8 @@ function App() {
     );
   }
 
+  const gpa = calculateGPA(courses);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
@@ -97,6 +111,18 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+        {/* Personal greeting */}
+        {studentName && (
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-6 text-white shadow-md">
+            <h2 className="text-2xl font-bold">
+              {getGreeting()}, {getFirstName(studentName)}
+            </h2>
+            <p className="text-blue-100 mt-1 text-sm">
+              Your current GPA is <strong className="text-white">{gpa.toFixed(4)}</strong> — keep it up!
+            </p>
+          </div>
+        )}
+
         {showImport && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
@@ -108,7 +134,7 @@ function App() {
                 Close
               </button>
             </div>
-            <FileUploader onImport={(c) => { importCourses(c); setShowImport(false); }} />
+            <FileUploader onImport={(c, name) => { importCourses(c, name); setShowImport(false); }} />
           </div>
         )}
 

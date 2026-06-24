@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Course } from './types';
 
 const STORAGE_KEY = 'kth-grades-courses';
+const NAME_KEY = 'kth-grades-student-name';
 
 export function useCourses() {
   const [courses, setCourses] = useState<Course[]>(() => {
@@ -16,6 +17,10 @@ export function useCourses() {
     return [];
   });
 
+  const [studentName, setStudentName] = useState<string | null>(
+    () => localStorage.getItem(NAME_KEY)
+  );
+
   const [initialized, setInitialized] = useState(
     () => localStorage.getItem(STORAGE_KEY) !== null
   );
@@ -26,14 +31,23 @@ export function useCourses() {
     }
   }, [courses, initialized]);
 
+  useEffect(() => {
+    if (studentName) {
+      localStorage.setItem(NAME_KEY, studentName);
+    } else {
+      localStorage.removeItem(NAME_KEY);
+    }
+  }, [studentName]);
+
   function addCourse(course: Course) {
     setInitialized(true);
     setCourses(prev => [...prev, course]);
   }
 
-  function importCourses(newCourses: Course[]) {
+  function importCourses(newCourses: Course[], name?: string | null) {
     setInitialized(true);
     setCourses(prev => [...prev, ...newCourses]);
+    if (name) setStudentName(name);
   }
 
   function updateCourse(id: string, updates: Partial<Course>) {
@@ -46,7 +60,8 @@ export function useCourses() {
 
   function clearAll() {
     setCourses([]);
+    setStudentName(null);
   }
 
-  return { courses, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty: !initialized };
+  return { courses, studentName, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty: !initialized };
 }

@@ -51,7 +51,27 @@ async function extractTextItems(file: File): Promise<TextItem[]> {
   return items;
 }
 
-export async function parsePdf(file: File): Promise<Course[]> {
+export interface PdfResult {
+  courses: Course[];
+  studentName: string | null;
+}
+
+function extractStudentName(sortedRows: TextItem[][]): string | null {
+  for (let i = 0; i < sortedRows.length; i++) {
+    const rowText = sortedRows[i].map(it => it.text).join(' ').trim();
+    if (rowText.toLowerCase() === 'namn' || rowText.toLowerCase() === 'name') {
+      if (i + 1 < sortedRows.length) {
+        const nameRow = sortedRows[i + 1].map(it => it.text).join(' ').trim();
+        if (nameRow && !nameRow.toLowerCase().includes('datum') && !nameRow.toLowerCase().includes('personnummer')) {
+          return nameRow;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export async function parsePdf(file: File): Promise<PdfResult> {
   let items: TextItem[];
   try {
     items = await extractTextItems(file);
@@ -126,7 +146,7 @@ export async function parsePdf(file: File): Promise<Course[]> {
   }
 
   if (!columns) {
-    return parsePdfByPatterns(sortedRows);
+    return { courses: parsePdfByPatterns(sortedRows), studentName: extractStudentName(sortedRows) };
   }
 
   const courses: Course[] = [];
@@ -193,7 +213,7 @@ export async function parsePdf(file: File): Promise<Course[]> {
     });
   }
 
-  return courses;
+  return { courses, studentName: extractStudentName(sortedRows) };
 }
 
 function parsePdfByPatterns(sortedRows: TextItem[][]): Course[] {

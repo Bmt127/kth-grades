@@ -4,7 +4,7 @@ import type { Course } from '../types';
 import { parseCSV, generateSampleCSV } from '../csvParser';
 import { parsePdf } from '../pdfParser';
 
-export function FileUploader({ onImport }: { onImport: (courses: Course[]) => void }) {
+export function FileUploader({ onImport }: { onImport: (courses: Course[], studentName?: string | null) => void }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -16,9 +16,12 @@ export function FileUploader({ onImport }: { onImport: (courses: Course[]) => vo
 
     try {
       let courses: Course[];
+      let studentName: string | null = null;
 
       if (file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf') {
-        courses = await parsePdf(file);
+        const result = await parsePdf(file);
+        courses = result.courses;
+        studentName = result.studentName;
       } else {
         const text = await file.text();
         courses = parseCSV(text);
@@ -31,7 +34,7 @@ export function FileUploader({ onImport }: { onImport: (courses: Course[]) => vo
         return;
       }
 
-      onImport(courses);
+      onImport(courses, studentName);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to parse file');
     } finally {
