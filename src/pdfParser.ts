@@ -1,10 +1,8 @@
 import type { Course, Grade } from './types';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url
-).toString();
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 const VALID_GRADES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'Fx', 'P']);
 
@@ -34,12 +32,14 @@ async function extractTextItems(file: File): Promise<TextItem[]> {
     const content = await page.getTextContent();
     const pageHeight = (page.view[3] - page.view[1]);
 
-    for (const item of content.items) {
-      if (!('str' in item) || !item.str.trim()) continue;
+    if (!content.items || !Array.isArray(content.items)) continue;
+
+    for (let j = 0; j < content.items.length; j++) {
+      const item = content.items[j];
+      if (!item || !('str' in item) || !item.str.trim()) continue;
       items.push({
         text: item.str.trim(),
         x: Math.round(item.transform[4]),
-        // Normalize y so page 1 items come before page 2
         y: (i - 1) * 10000 + (pageHeight - item.transform[5]),
       });
     }
@@ -53,11 +53,13 @@ export async function parsePdf(file: File): Promise<Course[]> {
 
   // Group items into rows by y position (within 3px tolerance)
   const rows = new Map<number, TextItem[]>();
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     let matchedY: number | null = null;
-    for (const existingY of rows.keys()) {
-      if (Math.abs(existingY - item.y) < 4) {
-        matchedY = existingY;
+    const keys = Array.from(rows.keys());
+    for (let k = 0; k < keys.length; k++) {
+      if (Math.abs(keys[k] - item.y) < 4) {
+        matchedY = keys[k];
         break;
       }
     }
@@ -67,34 +69,40 @@ export async function parsePdf(file: File): Promise<Course[]> {
   }
 
   // Sort rows top to bottom, items left to right within each row
-  const sortedRows = [...rows.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([, items]) => items.sort((a, b) => a.x - b.x));
+  const sortedKeys = Array.from(rows.keys()).sort((a, b) => a - b);
+  const sortedRows: TextItem[][] = [];
+  for (let i = 0; i < sortedKeys.length; i++) {
+    const items = rows.get(sortedKeys[i])!;
+    items.sort((a, b) => a.x - b.x);
+    sortedRows.push(items);
+  }
 
-  // Identify columns by looking for header row with "Benämning", "Omfattning", "Betyg", "Datum"
-  // or English: "Name"/"Course", "Credits"/"Scope", "Grade", "Date"
+  // Identify header row with "Benämning", "Omfattning", "Betyg", "Datum"
   let headerRowIdx = -1;
   let columns: { name: number; credits: number; grade: number; date: number } | null = null;
 
   for (let i = 0; i < sortedRows.length; i++) {
-    const rowText = sortedRows[i].map(it => it.text.toLowerCase());
-    const hasName = rowText.some(t => t.includes('benämning') || t.includes('course') || t.includes('name'));
-    const hasGrade = rowText.some(t => t.includes('betyg') || t.includes('grade'));
+    const rowTexts: string[] = [];
+    for (let j = 0; j < sortedRows[i].length; j++) {
+      rowTexts.push(sortedRows[i][j].text.toLowerCase());
+    }
+    const hasName = rowTexts.some(t => t.includes('benämning') || t.includes('course') || t.includes('name'));
+    const hasGrade = rowTexts.some(t => t.includes('betyg') || t.includes('grade'));
 
     if (hasName && hasGrade) {
       headerRowIdx = i;
-      const nameItem = sortedRows[i].find(it =>
-        it.text.toLowerCase().includes('benämning') || it.text.toLowerCase().includes('course')
-      );
-      const creditsItem = sortedRows[i].find(it =>
-        it.text.toLowerCase().includes('omfattning') || it.text.toLowerCase().includes('credits') || it.text.toLowerCase().includes('scope')
-      );
-      const gradeItem = sortedRows[i].find(it =>
-        it.text.toLowerCase().includes('betyg') || it.text.toLowerCase().includes('grade')
-      );
-      const dateItem = sortedRows[i].find(it =>
-        it.text.toLowerCase().includes('datum') || it.text.toLowerCase().includes('date')
-      );
+      let nameItem: TextItem | undefined;
+      let creditsItem: TextItem | undefined;
+      let gradeItem: TextItem | undefined;
+      let dateItem: TextItem | undefined;
+
+      for (let j = 0; j < sortedRows[i].length; j++) {
+        const t = sortedRows[i][j].text.toLowerCase();
+        if (t.includes('benämning') || t.includes('course')) nameItem = sortedRows[i][j];
+        if (t.includes('omfattning') || t.includes('credits') || t.includes('scope')) creditsItem = sortedRows[i][j];
+        if (t.includes('betyg') || t.includes('grade')) gradeItem = sortedRows[i][j];
+        if (t.includes('datum') || t.includes('date')) dateItem = sortedRows[i][j];
+      }
 
       columns = {
         name: nameItem?.x ?? 0,
@@ -106,19 +114,21 @@ export async function parsePdf(file: File): Promise<Course[]> {
     }
   }
 
-  // Fallback: if no header found, try to parse by pattern matching each row
   if (!columns) {
     return parsePdfByPatterns(sortedRows);
   }
 
   const courses: Course[] = [];
-  const threshold = 60; // x-position tolerance for column assignment
+  const threshold = 60;
 
   for (let i = headerRowIdx + 1; i < sortedRows.length; i++) {
     const row = sortedRows[i];
-    const rowTextJoined = row.map(it => it.text).join(' ');
+    let rowTextJoined = '';
+    for (let j = 0; j < row.length; j++) {
+      rowTextJoined += row[j].text + ' ';
+    }
 
-    // Stop at "Summering" or footer sections
+    // Stop at footer sections
     if (rowTextJoined.toLowerCase().includes('summering') ||
         rowTextJoined.toLowerCase().includes('kontrollera intyget') ||
         rowTextJoined.toLowerCase().includes('noter och information')) {
@@ -131,7 +141,8 @@ export async function parsePdf(file: File): Promise<Course[]> {
     let grade = '';
     let date = '';
 
-    for (const item of row) {
+    for (let j = 0; j < row.length; j++) {
+      const item = row[j];
       const distName = Math.abs(item.x - columns.name);
       const distCredits = Math.abs(item.x - columns.credits);
       const distGrade = Math.abs(item.x - columns.grade);
@@ -141,7 +152,7 @@ export async function parsePdf(file: File): Promise<Course[]> {
       if (minDist === distName && distName < threshold) {
         name = name ? name + ' ' + item.text : item.text;
       } else if (minDist === distCredits && distCredits < threshold) {
-        credits = item.text;
+        credits = credits ? credits + ' ' + item.text : item.text;
       } else if (minDist === distGrade && distGrade < threshold) {
         grade = item.text;
       } else if (minDist === distDate && distDate < threshold) {
@@ -154,7 +165,13 @@ export async function parsePdf(file: File): Promise<Course[]> {
     const normalizedGrade = normalizeGrade(grade);
     if (!normalizedGrade) continue;
 
-    const creditsNum = parseFloat(credits.replace(',', '.').replace(/[^\d.]/g, '')) || 0;
+    // Skip sub-modules: credits in parentheses like "( 5,5 hp )"
+    const isSubModule = credits.includes('(') || credits.includes(')');
+    if (isSubModule) continue;
+
+    // Parse credits: "7,5 hp" or "7.5 hp"
+    const creditsClean = credits.replace(/[()]/g, '').replace(',', '.').replace(/[^\d.]/g, '');
+    const creditsNum = parseFloat(creditsClean) || 0;
 
     courses.push({
       id: crypto.randomUUID(),
@@ -176,9 +193,18 @@ function parsePdfByPatterns(sortedRows: TextItem[][]): Course[] {
   const gradeRe = /\b(Fx|FX|[A-F]|P|G|VG|U)\b/;
   const creditsRe = /(\d+[.,]\d)\s*hp/i;
   const dateRe = /\b(\d{4}-\d{2}-\d{2})\b/;
+  const subModuleRe = /\(\s*\d+[.,]\d\s*hp\s*\)/;
 
-  for (const row of sortedRows) {
-    const line = row.map(it => it.text).join(' ');
+  for (let i = 0; i < sortedRows.length; i++) {
+    const row = sortedRows[i];
+    let line = '';
+    for (let j = 0; j < row.length; j++) {
+      line += row[j].text + ' ';
+    }
+    line = line.trim();
+
+    // Skip sub-modules
+    if (subModuleRe.test(line)) continue;
 
     const gradeMatch = line.match(gradeRe);
     const creditsMatch = line.match(creditsRe);
@@ -189,12 +215,11 @@ function parsePdfByPatterns(sortedRows: TextItem[][]): Course[] {
     const grade = normalizeGrade(gradeMatch[1]);
     if (!grade) continue;
 
-    // Extract name by removing the grade, credits, date, and note number
     let name = line
       .replace(creditsRe, '')
       .replace(gradeRe, '')
       .replace(dateRe, '')
-      .replace(/\b\d{1,2}\b/g, '') // note numbers
+      .replace(/\b\d{1,2}\b/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
