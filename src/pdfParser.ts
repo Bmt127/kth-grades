@@ -68,16 +68,15 @@ export async function parsePdf(file: File): Promise<Course[]> {
     rows.get(key)!.push(item);
   }
 
-  // Sort rows top to bottom, items left to right within each row
   const sortedKeys = Array.from(rows.keys()).sort((a, b) => a - b);
   const sortedRows: TextItem[][] = [];
   for (let i = 0; i < sortedKeys.length; i++) {
-    const items = rows.get(sortedKeys[i])!;
-    items.sort((a, b) => a.x - b.x);
-    sortedRows.push(items);
+    const rowItems = rows.get(sortedKeys[i])!;
+    rowItems.sort((a, b) => a.x - b.x);
+    sortedRows.push(rowItems);
   }
 
-  // Identify header row with "Benämning", "Omfattning", "Betyg", "Datum"
+  // Find header row
   let headerRowIdx = -1;
   let columns: { name: number; credits: number; grade: number; date: number } | null = null;
 
@@ -128,14 +127,12 @@ export async function parsePdf(file: File): Promise<Course[]> {
       rowTextJoined += row[j].text + ' ';
     }
 
-    // Stop at footer sections
     if (rowTextJoined.toLowerCase().includes('summering') ||
         rowTextJoined.toLowerCase().includes('kontrollera intyget') ||
         rowTextJoined.toLowerCase().includes('noter och information')) {
       break;
     }
 
-    // Assign each item to the nearest column
     let name = '';
     let credits = '';
     let grade = '';
@@ -160,17 +157,17 @@ export async function parsePdf(file: File): Promise<Course[]> {
       }
     }
 
-    if (!name || !grade) continue;
+    if (!name) continue;
 
-    const normalizedGrade = normalizeGrade(grade);
-    if (!normalizedGrade) continue;
-
-    // Skip sub-modules: credits in parentheses like "( 5,5 hp )"
+    // Skip sub-modules (credits in parentheses like "( 5,5 hp )")
     const isSubModule = credits.includes('(') || credits.includes(')');
     if (isSubModule) continue;
 
-    // Parse credits: "7,5 hp" or "7.5 hp"
-    const creditsClean = credits.replace(/[()]/g, '').replace(',', '.').replace(/[^\d.]/g, '');
+    // Skip rows without a grade (unfinished courses)
+    const normalizedGrade = grade ? normalizeGrade(grade) : null;
+    if (!normalizedGrade) continue;
+
+    const creditsClean = credits.replace(',', '.').replace(/[^\d.]/g, '');
     const creditsNum = parseFloat(creditsClean) || 0;
 
     courses.push({
@@ -187,7 +184,6 @@ export async function parsePdf(file: File): Promise<Course[]> {
   return courses;
 }
 
-// Fallback parser using regex patterns on reconstructed lines
 function parsePdfByPatterns(sortedRows: TextItem[][]): Course[] {
   const courses: Course[] = [];
   const gradeRe = /\b(Fx|FX|[A-F]|P|G|VG|U)\b/;
@@ -203,7 +199,6 @@ function parsePdfByPatterns(sortedRows: TextItem[][]): Course[] {
     }
     line = line.trim();
 
-    // Skip sub-modules
     if (subModuleRe.test(line)) continue;
 
     const gradeMatch = line.match(gradeRe);
