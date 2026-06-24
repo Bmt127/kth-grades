@@ -143,7 +143,7 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
 
   const analysis = useMemo(() => {
     const target = parseFloat(targetGPA);
-    if (!target || target <= currentGPA || target > 5.0) return null;
+    if (isNaN(target) || target <= currentGPA || target > 5.01) return null;
 
     const plans = findRetakePlans(courses, target, currentGPA);
     const reachingPlans = plans.filter(p => p.gpaAfter >= target);
@@ -190,13 +190,14 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
             <div className="flex items-center gap-2">
               <label className="text-sm text-gray-600">Target GPA:</label>
               <input
-                type="number"
-                step="0.01"
-                min={currentGPA + 0.001}
-                max="5.0"
-                placeholder="e.g. 4.0"
+                type="text"
+                inputMode="decimal"
+                placeholder="e.g. 5.0"
                 value={targetGPA}
-                onChange={e => setTargetGPA(e.target.value)}
+                onChange={e => {
+                  const v = e.target.value;
+                  if (v === '' || /^\d*\.?\d*$/.test(v)) setTargetGPA(v);
+                }}
                 className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               />
             </div>
