@@ -7,6 +7,7 @@ import { CourseTable } from './components/CourseTable';
 import { AddCourseForm } from './components/AddCourseForm';
 import { FileUploader } from './components/FileUploader';
 import { GPASimulator } from './components/GPASimulator';
+import { StudyAdvisor } from './components/StudyAdvisor';
 import { useState } from 'react';
 
 function App() {
@@ -119,6 +120,8 @@ function App() {
         </div>
 
         <GPASimulator courses={courses} />
+
+        <StudyAdvisor courses={courses} />
 
         <CourseTable courses={courses} onUpdate={updateCourse} onDelete={deleteCourse} />
 
