@@ -209,13 +209,14 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
             <div className="flex items-center gap-2">
               <label className="text-sm text-gray-600">Target GPA:</label>
               <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="5.00"
+                type="text"
+                inputMode="decimal"
                 placeholder="e.g. 4.0"
                 value={targetGPA}
-                onChange={e => setTargetGPA(e.target.value)}
+                onChange={e => {
+                  const v = e.target.value;
+                  if (v === '' || /^\d*\.?\d*$/.test(v)) setTargetGPA(v);
+                }}
                 className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               />
             </div>
