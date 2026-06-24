@@ -24,6 +24,18 @@ interface TextItem {
   y: number;
 }
 
+// Join text items that are close together without spaces (handles char-by-char PDFs)
+function joinItems(items: TextItem[]): string {
+  if (items.length === 0) return '';
+  const sorted = [...items].sort((a, b) => a.x - b.x);
+  let result = sorted[0].text;
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = sorted[i].x - (sorted[i - 1].x + sorted[i - 1].text.length * 5);
+    result += gap > 8 ? ' ' + sorted[i].text : sorted[i].text;
+  }
+  return result;
+}
+
 async function extractTextItems(file: File): Promise<TextItem[]> {
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
@@ -58,11 +70,17 @@ export interface PdfResult {
 
 function extractStudentName(sortedRows: TextItem[][]): string | null {
   for (let i = 0; i < sortedRows.length; i++) {
-    const rowText = sortedRows[i].map(it => it.text).join(' ').trim();
+    const rowText = joinItems(sortedRows[i]).trim();
     if (rowText.toLowerCase() === 'namn' || rowText.toLowerCase() === 'name') {
       if (i + 1 < sortedRows.length) {
-        const nameRow = sortedRows[i + 1].map(it => it.text).join(' ').trim();
+        const nameRow = joinItems(sortedRows[i + 1]).trim();
         if (nameRow && !nameRow.toLowerCase().includes('datum') && !nameRow.toLowerCase().includes('personnummer')) {
+          // Name row might also contain personnummer on the same y-line
+          // Take only items to the left of x=300 (name column area)
+          const nameOnlyItems = sortedRows[i + 1].filter(it => it.x < 300);
+          if (nameOnlyItems.length > 0) {
+            return joinItems(nameOnlyItems).trim();
+          }
           return nameRow;
         }
       }
@@ -113,33 +131,40 @@ export async function parsePdf(file: File): Promise<PdfResult> {
   let columns: { name: number; credits: number; grade: number; date: number } | null = null;
 
   for (let i = 0; i < sortedRows.length; i++) {
-    const rowTexts: string[] = [];
-    for (let j = 0; j < sortedRows[i].length; j++) {
-      rowTexts.push(sortedRows[i][j].text.toLowerCase());
-    }
-    const hasName = rowTexts.some(t => t.includes('benämning') || t.includes('course') || t.includes('name'));
-    const hasGrade = rowTexts.some(t => t.includes('betyg') || t.includes('grade'));
+    const fullRowText = joinItems(sortedRows[i]).toLowerCase();
+    const hasName = fullRowText.includes('benämning') || fullRowText.includes('course');
+    const hasGrade = fullRowText.includes('betyg') || fullRowText.includes('grade');
 
     if (hasName && hasGrade) {
       headerRowIdx = i;
-      let nameItem: TextItem | undefined;
-      let creditsItem: TextItem | undefined;
-      let gradeItem: TextItem | undefined;
-      let dateItem: TextItem | undefined;
 
-      for (let j = 0; j < sortedRows[i].length; j++) {
-        const t = sortedRows[i][j].text.toLowerCase();
-        if (t.includes('benämning') || t.includes('course')) nameItem = sortedRows[i][j];
-        if (t.includes('omfattning') || t.includes('credits') || t.includes('scope')) creditsItem = sortedRows[i][j];
-        if (t.includes('betyg') || t.includes('grade')) gradeItem = sortedRows[i][j];
-        if (t.includes('datum') || t.includes('date')) dateItem = sortedRows[i][j];
+      // Group items into clusters by proximity to find column start positions
+      const clusters: { x: number; text: string }[] = [];
+      const sorted = [...sortedRows[i]].sort((a, b) => a.x - b.x);
+      let cluster = { x: sorted[0].x, items: [sorted[0]] };
+      for (let j = 1; j < sorted.length; j++) {
+        if (sorted[j].x - sorted[j - 1].x < 15) {
+          cluster.items.push(sorted[j]);
+        } else {
+          clusters.push({ x: cluster.x, text: cluster.items.map(it => it.text).join('').toLowerCase() });
+          cluster = { x: sorted[j].x, items: [sorted[j]] };
+        }
+      }
+      clusters.push({ x: cluster.x, text: cluster.items.map(it => it.text).join('').toLowerCase() });
+
+      let nameX = 0, creditsX = 200, gradeX = 400, dateX = 500;
+      for (const c of clusters) {
+        if (c.text.includes('benämning') || c.text.includes('course') || c.text.includes('name')) nameX = c.x;
+        else if (c.text.includes('omfattning') || c.text.includes('credits') || c.text.includes('scope')) creditsX = c.x;
+        else if (c.text.includes('betyg') || c.text.includes('grade')) gradeX = c.x;
+        else if (c.text.includes('datum') || c.text.includes('date')) dateX = c.x;
       }
 
       columns = {
-        name: nameItem?.x ?? 0,
-        credits: creditsItem?.x ?? 200,
-        grade: gradeItem?.x ?? 400,
-        date: dateItem?.x ?? 500,
+        name: nameX,
+        credits: creditsX,
+        grade: gradeX,
+        date: dateX,
       };
       break;
     }
@@ -165,10 +190,10 @@ export async function parsePdf(file: File): Promise<PdfResult> {
       break;
     }
 
-    let name = '';
-    let credits = '';
-    let grade = '';
-    let date = '';
+    const nameItems: TextItem[] = [];
+    const creditsItems: TextItem[] = [];
+    const gradeItems: TextItem[] = [];
+    const dateItems: TextItem[] = [];
 
     for (let j = 0; j < row.length; j++) {
       const item = row[j];
@@ -179,27 +204,34 @@ export async function parsePdf(file: File): Promise<PdfResult> {
       const minDist = Math.min(distName, distCredits, distGrade, distDate);
 
       if (minDist === distName && distName < threshold) {
-        name = name ? name + ' ' + item.text : item.text;
+        nameItems.push(item);
       } else if (minDist === distCredits && distCredits < threshold) {
-        credits = credits ? credits + ' ' + item.text : item.text;
+        creditsItems.push(item);
       } else if (minDist === distGrade && distGrade < threshold) {
-        grade = item.text;
+        gradeItems.push(item);
       } else if (minDist === distDate && distDate < threshold) {
-        date = item.text;
+        dateItems.push(item);
       }
     }
+
+    const name = joinItems(nameItems);
+    const credits = joinItems(creditsItems);
+    const grade = joinItems(gradeItems);
+    const date = joinItems(dateItems);
 
     if (!name) continue;
 
     // Skip sub-modules (credits in parentheses like "( 5,5 hp )")
-    const isSubModule = credits.includes('(') || credits.includes(')');
+    const creditsRaw = credits.replace(/\s/g, '');
+    const isSubModule = creditsRaw.includes('(') || creditsRaw.includes(')');
     if (isSubModule) continue;
 
     // Skip rows without a grade (unfinished courses)
     const normalizedGrade = grade ? normalizeGrade(grade) : null;
     if (!normalizedGrade) continue;
 
-    const creditsClean = credits.replace(',', '.').replace(/[^\d.]/g, '');
+    const creditsNoSpaces = credits.replace(/\s/g, '');
+    const creditsClean = creditsNoSpaces.replace(',', '.').replace(/[^\d.]/g, '');
     const creditsNum = parseFloat(creditsClean) || 0;
 
     courses.push({
