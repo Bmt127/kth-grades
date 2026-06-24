@@ -1,8 +1,10 @@
 import type { Course, Grade } from './types';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 const VALID_GRADES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'Fx', 'P']);
 
@@ -37,6 +39,7 @@ async function extractTextItems(file: File): Promise<TextItem[]> {
     for (let j = 0; j < content.items.length; j++) {
       const item = content.items[j];
       if (!item || !('str' in item) || !item.str.trim()) continue;
+      if (!item.transform || !Array.isArray(item.transform)) continue;
       items.push({
         text: item.str.trim(),
         x: Math.round(item.transform[4]),
@@ -49,7 +52,16 @@ async function extractTextItems(file: File): Promise<TextItem[]> {
 }
 
 export async function parsePdf(file: File): Promise<Course[]> {
-  const items = await extractTextItems(file);
+  let items: TextItem[];
+  try {
+    items = await extractTextItems(file);
+  } catch (err) {
+    console.error('PDF text extraction failed:', err);
+    throw new Error('Could not read this PDF. Make sure it is a Ladok resultatintyg (not a scanned image).');
+  }
+  if (items.length === 0) {
+    throw new Error('No text found in this PDF. It may be a scanned image — try downloading a new copy from Ladok.');
+  }
 
   // Group items into rows by y position (within 3px tolerance)
   const rows = new Map<number, TextItem[]>();
