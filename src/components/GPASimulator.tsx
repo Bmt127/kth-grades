@@ -163,7 +163,7 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
 
   const analysis = useMemo(() => {
     const target = parseFloat(targetGPA);
-    if (!target || target <= currentGPA || target > 5.0) return null;
+    if (isNaN(target) || target <= 0 || target <= currentGPA || target > 5.01) return null;
 
     const plans = findRetakePlans(courses, target, currentGPA);
     const reachingPlans = plans.filter(p => p.gpaAfter >= target);
