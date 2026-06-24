@@ -8,17 +8,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const VALID_GRADES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'Fx', 'P']);
 
-// Fix text where PDF extracted individual chars: "T e n t a m e n" → "Tentamen"
-function fixSpacedText(text: string): string {
-  // Detect if most "words" are single characters
-  const parts = text.split(/\s+/);
-  const singleChars = parts.filter(p => p.length === 1).length;
-  if (singleChars > parts.length * 0.6 && parts.length > 3) {
-    return parts.join('');
-  }
-  return text;
-}
-
 function normalizeGrade(raw: string): Grade | null {
   const upper = raw.trim().toUpperCase();
   if (upper === 'FX') return 'Fx';
@@ -140,16 +129,7 @@ export async function parsePdf(file: File): Promise<Course[]> {
     return parsePdfByPatterns(sortedRows);
   }
 
-  // First pass: parse all rows into structured data
-  interface RawRow {
-    name: string;
-    credits: number;
-    grade: Grade | null;
-    date: string;
-    isSubModule: boolean;
-  }
-
-  const allRows: RawRow[] = [];
+  const courses: Course[] = [];
   const threshold = 60;
 
   for (let i = headerRowIdx + 1; i < sortedRows.length; i++) {
@@ -191,60 +171,26 @@ export async function parsePdf(file: File): Promise<Course[]> {
 
     if (!name) continue;
 
+    // Skip sub-modules (credits in parentheses like "( 5,5 hp )")
     const isSubModule = credits.includes('(') || credits.includes(')');
-    const normalizedGrade = grade ? normalizeGrade(grade) : null;
-    const creditsClean = credits.replace(/[()]/g, '').replace(',', '.').replace(/[^\d.]/g, '');
+    if (isSubModule) continue;
 
-    allRows.push({
-      name: fixSpacedText(name.trim()),
-      credits: parseFloat(creditsClean) || 0,
+    // Skip rows without a grade (unfinished courses)
+    const normalizedGrade = grade ? normalizeGrade(grade) : null;
+    if (!normalizedGrade) continue;
+
+    const creditsClean = credits.replace(',', '.').replace(/[^\d.]/g, '');
+    const creditsNum = parseFloat(creditsClean) || 0;
+
+    courses.push({
+      id: crypto.randomUUID(),
+      code: '',
+      name: name.trim(),
+      credits: creditsNum,
       grade: normalizedGrade,
       date,
-      isSubModule,
+      period: '',
     });
-  }
-
-  // Second pass: group sub-modules under parent courses
-  const courses: Course[] = [];
-  let idx = 0;
-
-  while (idx < allRows.length) {
-    const row = allRows[idx];
-
-    if (!row.isSubModule) {
-      // Collect following sub-modules
-      const subs: RawRow[] = [];
-      let next = idx + 1;
-      while (next < allRows.length && allRows[next].isSubModule) {
-        subs.push(allRows[next]);
-        next++;
-      }
-
-      if (row.grade) {
-        // Completed course — include with sub-module info
-        const subModules = subs.map(s => ({
-          name: s.name,
-          credits: s.credits,
-          grade: s.grade,
-        }));
-
-        courses.push({
-          id: crypto.randomUUID(),
-          code: '',
-          name: row.name,
-          credits: row.credits,
-          grade: row.grade,
-          date: row.date,
-          period: '',
-          subModules: subModules.length > 0 ? subModules : undefined,
-        });
-      }
-      // If no grade on parent, skip (unfinished course)
-
-      idx = next;
-    } else {
-      idx++;
-    }
   }
 
   return courses;

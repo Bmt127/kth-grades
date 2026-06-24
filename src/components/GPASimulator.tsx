@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Target, Lightbulb, ChevronDown, ChevronUp, FileText, FlaskConical } from 'lucide-react';
+import { Target, Lightbulb, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Course, Grade } from '../types';
 import { GRADE_POINTS } from '../types';
 import { calculateGPA } from '../gpaUtils';
@@ -18,9 +18,11 @@ function gpaWith(courses: Course[], overrides: Map<string, Grade>): number {
 }
 
 function findRetakePlans(courses: Course[], target: number, currentGPA: number): RetakePlan[] {
+  // Only courses with grades that can be improved (not A, not P, not F/Fx)
   const improvable = courses
     .filter(c => GRADE_POINTS[c.grade] !== null && c.grade !== 'A')
     .sort((a, b) => {
+      // Sort by potential impact: biggest gain first (low grade + high credits)
       const impactA = (5.0 - (GRADE_POINTS[a.grade] ?? 0)) * a.credits;
       const impactB = (5.0 - (GRADE_POINTS[b.grade] ?? 0)) * b.credits;
       return impactB - impactA;
@@ -28,7 +30,7 @@ function findRetakePlans(courses: Course[], target: number, currentGPA: number):
 
   const plans: RetakePlan[] = [];
 
-  // Single course retakes
+  // Strategy 1: Single course retakes
   for (const course of improvable) {
     const currentPts = GRADE_POINTS[course.grade]!;
     for (const toGrade of LETTER_GRADES) {
@@ -45,13 +47,15 @@ function findRetakePlans(courses: Course[], target: number, currentGPA: number):
     }
   }
 
-  // Multi-course combos (2-4 retakes)
+  // Strategy 2: Multi-course combos (2-3 retakes) targeting the goal
+  // Use greedy approach: pick best single retake, then add more if needed
   for (let size = 2; size <= Math.min(4, improvable.length); size++) {
+    // Try combinations of top candidates upgraded to A
     const topCandidates = improvable.slice(0, Math.min(8, improvable.length));
     const combos = getCombinations(topCandidates, size);
 
     for (const combo of combos) {
-      // All upgraded to A
+      // Try all-A upgrade for this combo
       const overrides = new Map<string, Grade>();
       const changes: { course: Course; from: Grade; to: Grade }[] = [];
       for (const course of combo) {
@@ -63,7 +67,7 @@ function findRetakePlans(courses: Course[], target: number, currentGPA: number):
         plans.push({ changes, gpaAfter, gpaGain: gpaAfter - currentGPA });
       }
 
-      // Each course up one grade
+      // Also try minimum upgrades: each course goes up just one grade
       const minOverrides = new Map<string, Grade>();
       const minChanges: { course: Course; from: Grade; to: Grade }[] = [];
       for (const course of combo) {
@@ -93,15 +97,19 @@ function findRetakePlans(courses: Course[], target: number, currentGPA: number):
   });
 
   unique.sort((a, b) => {
+    // Prefer plans that reach the target
     const aReaches = a.gpaAfter >= target;
     const bReaches = b.gpaAfter >= target;
     if (aReaches !== bReaches) return aReaches ? -1 : 1;
+    // Among those that reach target, prefer fewer changes
     if (aReaches && bReaches) {
       if (a.changes.length !== b.changes.length) return a.changes.length - b.changes.length;
+      // Then prefer easier upgrades (smaller grade jumps)
       const aDifficulty = a.changes.reduce((s, c) => s + (GRADE_POINTS[c.to]! - GRADE_POINTS[c.from]!), 0);
       const bDifficulty = b.changes.reduce((s, c) => s + (GRADE_POINTS[c.to]! - GRADE_POINTS[c.from]!), 0);
       return aDifficulty - bDifficulty;
     }
+    // Otherwise sort by GPA gain
     return b.gpaGain - a.gpaGain;
   });
 
@@ -128,34 +136,6 @@ const gradeBadge: Record<string, string> = {
   E: 'bg-red-100 text-red-700',
 };
 
-function SubModuleInfo({ course }: { course: Course }) {
-  if (!course.subModules || course.subModules.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap gap-1.5 mt-1">
-      {course.subModules.map((sub, i) => {
-        const isExam = /tent|exam|prov/i.test(sub.name);
-        const isLab = /lab|labb/i.test(sub.name);
-        const icon = isExam ? (
-          <FileText size={10} className="shrink-0" />
-        ) : isLab ? (
-          <FlaskConical size={10} className="shrink-0" />
-        ) : null;
-
-        return (
-          <span
-            key={i}
-            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded"
-          >
-            {icon}
-            {sub.name} ({sub.credits} hp)
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
 export function GPASimulator({ courses }: { courses: Course[] }) {
   const [targetGPA, setTargetGPA] = useState('');
   const [open, setOpen] = useState(false);
@@ -163,12 +143,13 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
 
   const analysis = useMemo(() => {
     const target = parseFloat(targetGPA);
-    if (isNaN(target) || target <= 0 || target <= currentGPA || target > 5.01) return null;
+    if (!target || target <= currentGPA || target > 5.0) return null;
 
     const plans = findRetakePlans(courses, target, currentGPA);
     const reachingPlans = plans.filter(p => p.gpaAfter >= target);
     const partialPlans = plans.filter(p => p.gpaAfter < target);
 
+    // Check if target is even possible (all courses upgraded to A)
     const allA = new Map<string, Grade>();
     for (const c of courses) {
       if (GRADE_POINTS[c.grade] !== null && c.grade !== 'A') {
@@ -209,14 +190,13 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
             <div className="flex items-center gap-2">
               <label className="text-sm text-gray-600">Target GPA:</label>
               <input
-                type="text"
-                inputMode="decimal"
+                type="number"
+                step="0.01"
+                min={currentGPA + 0.001}
+                max="5.0"
                 placeholder="e.g. 4.0"
                 value={targetGPA}
-                onChange={e => {
-                  const v = e.target.value;
-                  if (v === '' || /^\d*\.?\d*$/.test(v)) setTargetGPA(v);
-                }}
+                onChange={e => setTargetGPA(e.target.value)}
                 className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               />
             </div>
@@ -257,21 +237,18 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
                             → {plan.gpaAfter.toFixed(4)} GPA
                           </span>
                         </div>
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           {plan.changes.map((ch, j) => (
-                            <div key={j}>
-                              <div className="flex items-center gap-2 text-sm">
-                                <span className="text-gray-700 flex-1">{ch.course.name}</span>
-                                <span className="text-gray-400">({ch.course.credits} hp)</span>
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
-                                  {ch.from}
-                                </span>
-                                <span className="text-gray-400">→</span>
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
-                                  {ch.to}
-                                </span>
-                              </div>
-                              <SubModuleInfo course={ch.course} />
+                            <div key={j} className="flex items-center gap-2 text-sm">
+                              <span className="text-gray-700 flex-1">{ch.course.name}</span>
+                              <span className="text-gray-400">({ch.course.credits} hp)</span>
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
+                                {ch.from}
+                              </span>
+                              <span className="text-gray-400">→</span>
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
+                                {ch.to}
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -302,21 +279,18 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
                             </span>
                           </div>
                         </div>
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           {plan.changes.map((ch, j) => (
-                            <div key={j}>
-                              <div className="flex items-center gap-2 text-sm">
-                                <span className="text-gray-700 flex-1">{ch.course.name}</span>
-                                <span className="text-gray-400">({ch.course.credits} hp)</span>
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
-                                  {ch.from}
-                                </span>
-                                <span className="text-gray-400">→</span>
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
-                                  {ch.to}
-                                </span>
-                              </div>
-                              <SubModuleInfo course={ch.course} />
+                            <div key={j} className="flex items-center gap-2 text-sm">
+                              <span className="text-gray-700 flex-1">{ch.course.name}</span>
+                              <span className="text-gray-400">({ch.course.credits} hp)</span>
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
+                                {ch.from}
+                              </span>
+                              <span className="text-gray-400">→</span>
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
+                                {ch.to}
+                              </span>
                             </div>
                           ))}
                         </div>

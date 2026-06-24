@@ -1,11 +1,5 @@
 export type Grade = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'Fx' | 'P';
 
-export interface SubModule {
-  name: string;
-  credits: number;
-  grade: Grade | null;
-}
-
 export interface Course {
   id: string;
   code: string;
@@ -14,7 +8,6 @@ export interface Course {
   grade: Grade;
   date: string;
   period: string;
-  subModules?: SubModule[];
 }
 
 export const GRADE_POINTS: Record<Grade, number | null> = {
