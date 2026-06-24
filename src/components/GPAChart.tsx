@@ -28,7 +28,7 @@ export function GPAChart({ courses }: { courses: Course[] }) {
           <YAxis domain={[0, 5]} tick={{ fontSize: 12 }} stroke="#9ca3af" />
           <Tooltip
             contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
-            formatter={(value: number) => [value.toFixed(4), 'Cumulative GPA']}
+            formatter={(value) => [Number(value).toFixed(4), 'Cumulative GPA']}
           />
           <Line
             type="monotone"
