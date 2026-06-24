@@ -151,15 +151,43 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
 
     // Check if target is even possible (all courses upgraded to A)
     const allA = new Map<string, Grade>();
+    const nonACourses: Course[] = [];
     for (const c of courses) {
       if (GRADE_POINTS[c.grade] !== null && c.grade !== 'A') {
         allA.set(c.id, 'A');
+        nonACourses.push(c);
       }
     }
     const maxGPA = allA.size > 0 ? gpaWith(courses, allA) : currentGPA;
     const reachable = maxGPA >= target;
 
-    return { target, reachingPlans, partialPlans, reachable, maxGPA };
+    // Find the minimum set of retakes needed to reach the target
+    // Sort by impact (biggest gain first) and greedily add until target is reached
+    let fullPlan: { course: Course; from: Grade; to: Grade }[] | null = null;
+    if (reachable && reachingPlans.length === 0) {
+      const sorted = [...nonACourses].sort((a, b) => {
+        const impactA = (5.0 - (GRADE_POINTS[a.grade] ?? 0)) * a.credits;
+        const impactB = (5.0 - (GRADE_POINTS[b.grade] ?? 0)) * b.credits;
+        return impactB - impactA;
+      });
+
+      const needed: { course: Course; from: Grade; to: Grade }[] = [];
+      const overrides = new Map<string, Grade>();
+      for (const c of sorted) {
+        overrides.set(c.id, 'A');
+        needed.push({ course: c, from: c.grade, to: 'A' });
+        if (gpaWith(courses, overrides) >= target) break;
+      }
+      if (gpaWith(courses, overrides) >= target) {
+        fullPlan = needed;
+      }
+    }
+
+    const fullPlanGPA = fullPlan
+      ? gpaWith(courses, new Map(fullPlan.map(c => [c.course.id, c.to])))
+      : null;
+
+    return { target, reachingPlans, partialPlans, reachable, maxGPA, fullPlan, fullPlanGPA, totalRetakesNeeded: nonACourses.length };
   }, [courses, targetGPA, currentGPA]);
 
   return (
@@ -259,45 +287,86 @@ export function GPASimulator({ courses }: { courses: Course[] }) {
                 </div>
               )}
 
-              {analysis.reachingPlans.length === 0 && analysis.partialPlans.length > 0 && analysis.reachable && (
+              {analysis.reachingPlans.length === 0 && analysis.reachable && analysis.fullPlan && (
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                    Best retake options (more retakes may be needed to fully reach target):
-                  </h3>
-                  <div className="space-y-3">
-                    {analysis.partialPlans.slice(0, 8).map((plan, i) => (
-                      <div key={i} className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                            {plan.changes.length} retake{plan.changes.length > 1 ? 's' : ''}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">
-                              +{plan.gpaGain.toFixed(4)}
-                            </span>
-                            <span className="text-sm font-bold text-gray-700">
-                              → {plan.gpaAfter.toFixed(4)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="space-y-1.5">
-                          {plan.changes.map((ch, j) => (
-                            <div key={j} className="flex items-center gap-2 text-sm">
-                              <span className="text-gray-700 flex-1">{ch.course.name}</span>
-                              <span className="text-gray-400">({ch.course.credits} hp)</span>
-                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
-                                {ch.from}
-                              </span>
-                              <span className="text-gray-400">→</span>
-                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
-                                {ch.to}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
+                  <div className="rounded-lg p-4 bg-purple-50 border border-purple-200 mb-4">
+                    <div className="flex items-start gap-2">
+                      <Lightbulb size={18} className="text-purple-600 mt-0.5" />
+                      <div className="text-sm">
+                        <p className="font-medium text-purple-900">
+                          To reach {analysis.target.toFixed(2)} you need to retake {analysis.fullPlan.length} course{analysis.fullPlan.length > 1 ? 's' : ''} and get A in {analysis.fullPlan.length === 1 ? 'it' : 'all of them'}:
+                        </p>
                       </div>
-                    ))}
+                    </div>
                   </div>
+
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 mb-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-semibold text-purple-600 uppercase tracking-wide">
+                        Full plan — {analysis.fullPlan.length} retake{analysis.fullPlan.length > 1 ? 's' : ''} to A
+                      </span>
+                      <span className="text-sm font-bold text-emerald-700">
+                        → {analysis.fullPlanGPA?.toFixed(4)} GPA
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {analysis.fullPlan.map((ch, j) => (
+                        <div key={j} className="flex items-center gap-2 text-sm">
+                          <span className="text-gray-700 flex-1">{ch.course.name}</span>
+                          <span className="text-gray-400">({ch.course.credits} hp)</span>
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
+                            {ch.from}
+                          </span>
+                          <span className="text-gray-400">→</span>
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
+                            {ch.to}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {analysis.partialPlans.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                        Or start with these smaller improvements:
+                      </h3>
+                      <div className="space-y-3">
+                        {analysis.partialPlans.slice(0, 5).map((plan, i) => (
+                          <div key={i} className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                                {plan.changes.length} retake{plan.changes.length > 1 ? 's' : ''}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">
+                                  +{plan.gpaGain.toFixed(4)}
+                                </span>
+                                <span className="text-sm font-bold text-gray-700">
+                                  → {plan.gpaAfter.toFixed(4)}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="space-y-1.5">
+                              {plan.changes.map((ch, j) => (
+                                <div key={j} className="flex items-center gap-2 text-sm">
+                                  <span className="text-gray-700 flex-1">{ch.course.name}</span>
+                                  <span className="text-gray-400">({ch.course.credits} hp)</span>
+                                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.from]}`}>
+                                    {ch.from}
+                                  </span>
+                                  <span className="text-gray-400">→</span>
+                                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold ${gradeBadge[ch.to]}`}>
+                                    {ch.to}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
