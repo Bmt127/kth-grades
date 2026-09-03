@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "kth-grades Ladok Connector",
+  "version": "1.0",
+  "description": "Adds a one-click \"Send to kth-grades\" button on Ladok so importing your grades needs nothing but logging in.",
+  "permissions": ["tabs"],
+  "host_permissions": [
+    "https://www.student.ladok.se/*",
+    "https://bmt127.github.io/*",
+    "http://localhost:5173/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.student.ladok.se/*"],
+      "js": ["ladok-content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://bmt127.github.io/kth-grades/*", "http://localhost:5173/*"],
+      "js": ["app-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
