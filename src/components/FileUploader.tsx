@@ -3,6 +3,7 @@ import { Upload, Download, AlertCircle, Loader2 } from 'lucide-react';
 import type { Course } from '../types';
 import { parseCSV, generateSampleCSV } from '../csvParser';
 import { parsePdf } from '../pdfParser';
+import { LadokImport } from './LadokImport';
 
 export function FileUploader({ onImport }: { onImport: (courses: Course[], studentName?: string | null) => void }) {
   const [error, setError] = useState('');
@@ -61,6 +62,17 @@ export function FileUploader({ onImport }: { onImport: (courses: Course[], stude
 
   return (
     <div className="space-y-4">
+      <LadokImport onImport={onImport} />
+
+      <div className="relative my-2">
+        <div className="absolute inset-0 flex items-center">
+          <div className="w-full border-t border-gray-200" />
+        </div>
+        <div className="relative flex justify-center">
+          <span className="bg-white px-3 text-xs text-gray-400">or upload a file</span>
+        </div>
+      </div>
+
       <div
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
           dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
