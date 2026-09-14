@@ -1,10 +1,12 @@
-// Runs on every student.ladok.se page. Automatically finds and sends the
-// rendered grade text to the kth-grades app — no button, no manual page
-// navigation. Never touches credentials, cookies, or Ladok's own network
-// requests; only reads text that's already visible on the page.
+// Runs on every student.ladok.se page. Automatically finds your completed
+// courses on the "Min utbildning" overview, fetches each course's own detail
+// page (same-origin, using the session you're already logged into — no
+// credentials or cookies are ever touched or read by this script), reads out
+// its final grade, and sends the result to the kth-grades app in the
+// background. No button, no manual navigation.
 (function () {
   const TOAST_ID = 'kth-grades-toast';
-  let alreadySent = false;
+  let alreadyRunning = false;
 
   function showToast(message, ok) {
     let toast = document.getElementById(TOAST_ID);
@@ -33,63 +35,81 @@
     clearTimeout(toast._hideTimer);
     toast._hideTimer = setTimeout(() => {
       toast.style.opacity = '0';
-    }, 4000);
+    }, 5000);
   }
 
-  // Heuristic: does the visible text contain a course-code-then-grade pattern,
-  // like a real "Studieresultat" listing would? Mirrors the shape ladokParser.ts
-  // looks for, without needing to know Ladok's actual DOM structure.
-  function looksLikeResults(text) {
-    return /\b[A-ZÅÄÖ]{2,4}\d{3,4}[A-ZÅÄÖ]?\b[\s\S]{0,40}\b(Fx|FX|[A-F]|P|G|VG|U)\b/.test(text);
+  const CODE_RE = /\b([A-ZÅÄÖ]{2,4}\d{3,4}[A-ZÅÄÖ]?)\b/;
+  const GRADE_RE = /Slutbetyg\s*:?\s*[^()\n]*\(([A-Za-zÅÄÖåäö]{1,3})\)/i;
+  const CREDITS_RE = /(\d+[.,]\d)\s*(?:hp|fup)/i;
+
+  function findCourseRows() {
+    const links = Array.from(document.querySelectorAll('a[href*="/min-utbildning/kurs/"]'));
+    const seen = new Set();
+    const rows = [];
+    for (const link of links) {
+      if (seen.has(link.href)) continue;
+      seen.add(link.href);
+
+      // Walk up a few ancestors to find the row containing this course's
+      // status/credits text — Ladok's exact markup isn't documented.
+      let row = link;
+      for (let i = 0; i < 5 && row.parentElement; i++) {
+        row = row.parentElement;
+        if (row.innerText && row.innerText.length < 400) break;
+      }
+      const rowText = row.innerText || '';
+      if (!/Avklarad/i.test(rowText)) continue; // skip ongoing/registered courses — no grade yet
+
+      rows.push({ href: link.href, creditsHint: (rowText.match(CREDITS_RE) || [])[1] || null });
+    }
+    return rows;
   }
 
-  function send(text) {
-    if (alreadySent) return;
-    alreadySent = true;
-    chrome.runtime.sendMessage({ type: 'kth-grades-ladok-data', text }, (resp) => {
+  async function fetchCourseGrade(row) {
+    const res = await fetch(row.href, { credentials: 'same-origin' });
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const text = doc.body ? doc.body.innerText || doc.body.textContent || '' : '';
+
+    const codeMatch = text.slice(0, 600).match(CODE_RE);
+    const gradeMatch = text.match(GRADE_RE);
+    if (!codeMatch || !gradeMatch) return null;
+
+    const credits = (text.match(CREDITS_RE) || [])[1] || row.creditsHint || '0,0';
+    return `${codeMatch[1]} ${credits} hp ${gradeMatch[1]}`;
+  }
+
+  async function runImport() {
+    if (alreadyRunning) return;
+    const rows = findCourseRows();
+    if (rows.length === 0) return; // not on (or nothing found on) the course overview page
+
+    alreadyRunning = true;
+    showToast(`Hämtar betyg för ${rows.length} kurser…`, true);
+
+    const lines = [];
+    for (const row of rows) {
+      try {
+        const line = await fetchCourseGrade(row);
+        if (line) lines.push(line);
+      } catch (err) {
+        console.warn('[kth-grades] Failed to read course page', row.href, err);
+      }
+    }
+
+    if (lines.length === 0) {
+      showToast('⚠️ Hittade inga betyg att importera', false);
+      return;
+    }
+
+    chrome.runtime.sendMessage({ type: 'kth-grades-ladok-data', text: lines.join('\n') }, (resp) => {
       showToast(
-        resp && resp.ok ? '✅ Betyg skickade till kth-grades' : '⚠️ Kunde inte skicka betyg',
+        resp && resp.ok ? `✅ ${lines.length} betyg skickade till kth-grades` : '⚠️ Kunde inte skicka betyg',
         Boolean(resp && resp.ok)
       );
     });
   }
 
-  function findStudieresultatLink() {
-    const candidates = Array.from(document.querySelectorAll('a, button'));
-    return candidates.find((el) => /studieresultat/i.test(el.textContent || ''));
-  }
-
-  function tryAutoImport(attemptsLeft) {
-    if (alreadySent) return;
-
-    if (looksLikeResults(document.body.innerText)) {
-      send(document.body.innerText);
-      return;
-    }
-
-    if (attemptsLeft <= 0) return;
-
-    const link = findStudieresultatLink();
-    if (!link) {
-      // Nothing to click yet (page still loading) — try again shortly.
-      setTimeout(() => tryAutoImport(attemptsLeft - 1), 1000);
-      return;
-    }
-
-    const cameFrom = location.href;
-    link.click();
-
-    setTimeout(() => {
-      if (looksLikeResults(document.body.innerText)) {
-        send(document.body.innerText);
-        // We navigated on the user's behalf — take them back to where they were.
-        if (location.href !== cameFrom) history.back();
-      } else {
-        tryAutoImport(attemptsLeft - 1);
-      }
-    }, 1200);
-  }
-
-  // Give the SPA a moment to finish its own initial render before we look.
-  setTimeout(() => tryAutoImport(3), 800);
+  // Give the SPA a moment to finish rendering the course list before we look.
+  setTimeout(runImport, 1000);
 })();

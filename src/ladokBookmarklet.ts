@@ -1,4 +1,4 @@
-export const LADOK_URL = 'https://www.student.ladok.se/student/app/studentwebb/min-utbildning';
+export const LADOK_URL = 'https://student.ladok.se/student/app/studentwebb/min-utbildning';
 export const LADOK_MESSAGE_SOURCE = 'kth-grades-ladok-import';
 
 // Runs on the Ladok tab, not on this site. It never touches credentials or
