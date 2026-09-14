@@ -34,9 +34,12 @@ function App() {
   // one lands here even if you never opened the "Import" panel.
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
-      if (!e.data || e.data.source !== LADOK_MESSAGE_SOURCE || typeof e.data.text !== 'string') return;
+      if (!e.data || e.data.source !== LADOK_MESSAGE_SOURCE) return;
+      if (!Array.isArray(e.data.courses) && typeof e.data.text !== 'string') return;
 
-      const { courses: newCourses, studentName: name } = parseLadokText(e.data.text);
+      const { courses: newCourses, studentName: name } = Array.isArray(e.data.courses)
+        ? { courses: e.data.courses, studentName: null }
+        : parseLadokText(e.data.text);
       if (newCourses.length === 0) {
         setLadokToast({ ok: false, message: 'Got data from Ladok, but found no graded courses on that page.' });
         return;
