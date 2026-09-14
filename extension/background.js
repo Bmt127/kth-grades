@@ -22,8 +22,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!tab) {
         tab = await chrome.tabs.create({ url: APP_FALLBACK_URL, active: false });
         await waitForTabComplete(tab.id);
+      } else {
+        // An already-open tab may be running a stale bundle from before the
+        // app's own code last changed — a plain static-site reload doesn't
+        // reach it. Force a reload so it's guaranteed to run the latest code
+        // (and have the message listener actually mounted) before we send.
+        // Attach the wait *before* triggering the reload so we can't miss
+        // the "complete" transition.
+        const reloaded = waitForTabComplete(tab.id);
+        await chrome.tabs.reload(tab.id);
+        await reloaded;
       }
-      await chrome.tabs.sendMessage(tab.id, { type: 'kth-grades-ladok-data', text: message.text });
+      await chrome.tabs.sendMessage(tab.id, { type: 'kth-grades-ladok-data', text: message.text, courses: message.courses });
       // Import succeeded — take the user straight to the result.
       await chrome.tabs.update(tab.id, { active: true });
       await chrome.windows.update(tab.windowId, { focused: true });
