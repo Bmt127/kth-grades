@@ -17,7 +17,7 @@
     {
       "matches": ["https://student.ladok.se/*", "https://www.student.ladok.se/*"],
       "js": ["ladok-content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": ["https://bmt127.github.io/kth-grades/*", "http://localhost:5173/*"],

@@ -6,6 +6,22 @@
 // way KTH's own "kth-ladok-gpa" widget does: read out of network requests
 // the page itself already made, never guessed or constructed.
 (function () {
+  // Runs at document_start, before the SPA has fetched anything, so this
+  // takes effect first. A completely fresh login (cold cache, straight out
+  // of a KTH two-factor redirect) makes far more network requests than a
+  // warm/cached session — enough to overflow the Performance API's default
+  // resource-timing buffer (~150-250 entries), silently dropping later
+  // entries, including the very requests we read the session id out of.
+  // Raise it generously so that never happens.
+  try {
+    performance.setResourceTimingBufferSize(2000);
+    performance.addEventListener('resourcetimingbufferfull', () => {
+      performance.setResourceTimingBufferSize(4000);
+    });
+  } catch (err) {
+    console.warn('[kth-grades] Could not raise resource timing buffer size', err);
+  }
+
   const TOAST_ID = 'kth-grades-toast';
   let alreadyRunning = false;
 
