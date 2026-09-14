@@ -8,10 +8,13 @@ import { AddCourseForm } from './components/AddCourseForm';
 import { FileUploader } from './components/FileUploader';
 import { GPASimulator } from './components/GPASimulator';
 import { StudyAdvisor } from './components/StudyAdvisor';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { calculateGPA } from './gpaUtils';
 import { parseLadokText } from './ladokParser';
 import { LADOK_MESSAGE_SOURCE } from './ladokBookmarklet';
+
+const ALL_PROGRAMS = '__all__';
+const SELECTED_PROGRAM_KEY = 'kth-grades-selected-program';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -28,6 +31,39 @@ function App() {
   const { courses, studentName, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty } = useCourses();
   const [showImport, setShowImport] = useState(false);
   const [ladokToast, setLadokToast] = useState<{ ok: boolean; message: string } | null>(null);
+  const [selectedProgram, setSelectedProgram] = useState<string>(() => {
+    try {
+      return localStorage.getItem(SELECTED_PROGRAM_KEY) || ALL_PROGRAMS;
+    } catch {
+      return ALL_PROGRAMS;
+    }
+  });
+
+  const programs = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of courses) {
+      if (c.program) map.set(c.program, c.programName || c.program);
+    }
+    return Array.from(map.entries()).map(([id, label]) => ({ id, label }));
+  }, [courses]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SELECTED_PROGRAM_KEY, selectedProgram);
+    } catch {
+      // Remembering the choice is a nice-to-have, not essential.
+    }
+  }, [selectedProgram]);
+
+  // Courses with no program tag (added manually, or imported from a PDF/CSV)
+  // are always shown — we simply don't know which program they belong to.
+  const filteredCourses = useMemo(
+    () =>
+      selectedProgram === ALL_PROGRAMS
+        ? courses
+        : courses.filter((c) => !c.program || c.program === selectedProgram),
+    [courses, selectedProgram]
+  );
 
   // Always listening, regardless of which screen is showing — this is what the
   // Ladok extension (and the bookmarklet) posts into, so an import from either
@@ -109,7 +145,7 @@ function App() {
     );
   }
 
-  const gpa = calculateGPA(courses);
+  const gpa = calculateGPA(filteredCourses);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -134,6 +170,21 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {programs.length > 1 && (
+              <select
+                value={selectedProgram}
+                onChange={(e) => setSelectedProgram(e.target.value)}
+                className="text-sm border border-gray-200 rounded-lg px-2 py-2 text-gray-700 bg-white cursor-pointer max-w-[220px]"
+                title="Show GPA for a specific program"
+              >
+                <option value={ALL_PROGRAMS}>All programs</option>
+                {programs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               onClick={() => setShowImport(!showImport)}
               className="flex items-center gap-1.5 px-3 py-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors text-sm cursor-pointer"
@@ -180,18 +231,18 @@ function App() {
           </div>
         )}
 
-        <StatsCards courses={courses} />
+        <StatsCards courses={filteredCourses} />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <GPAChart courses={courses} />
-          <GradeDistribution courses={courses} />
+          <GPAChart courses={filteredCourses} />
+          <GradeDistribution courses={filteredCourses} />
         </div>
 
-        <GPASimulator courses={courses} />
+        <GPASimulator courses={filteredCourses} />
 
-        <StudyAdvisor courses={courses} />
+        <StudyAdvisor courses={filteredCourses} />
 
-        <CourseTable courses={courses} onUpdate={updateCourse} onDelete={deleteCourse} />
+        <CourseTable courses={filteredCourses} onUpdate={updateCourse} onDelete={deleteCourse} />
 
         <div className="text-center py-4">
           <p className="text-xs text-gray-400">

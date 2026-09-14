@@ -132,25 +132,37 @@
     }
   }
 
-  function dedupeRetakenCourses(kurser) {
+  // Operates on {kurs, programKod, programName} entries (not raw kurs
+  // objects) so the program a retaken course is deduped down to is kept.
+  function dedupeRetakenEntries(entries) {
     const byKurskod = new Map();
     const withoutKurskod = [];
-    for (const k of kurser) {
-      const kod = k.Utbildningsinformation?.Utbildningskod;
+    for (const e of entries) {
+      const kod = e.kurs.Utbildningsinformation?.Utbildningskod;
       if (!kod) {
-        withoutKurskod.push(k);
+        withoutKurskod.push(e);
         continue;
       }
       const existing = byKurskod.get(kod);
       if (!existing) {
-        byKurskod.set(kod, k);
+        byKurskod.set(kod, e);
         continue;
       }
-      const existingStart = new Date(existing.Utbildningsinformation?.Studieperiod?.Startdatum || 0);
-      const currentStart = new Date(k.Utbildningsinformation?.Studieperiod?.Startdatum || 0);
-      if (currentStart >= existingStart) byKurskod.set(kod, k);
+      const existingStart = new Date(existing.kurs.Utbildningsinformation?.Studieperiod?.Startdatum || 0);
+      const currentStart = new Date(e.kurs.Utbildningsinformation?.Studieperiod?.Startdatum || 0);
+      if (currentStart >= existingStart) byKurskod.set(kod, e);
     }
     return [...withoutKurskod, ...byKurskod.values()];
+  }
+
+  function programLabel(node) {
+    const info = node.Utbildningsinformation || {};
+    const benamning = info.Benamning;
+    if (typeof benamning === 'string' && benamning) return benamning;
+    if (benamning && typeof benamning === 'object') {
+      return benamning.sv || benamning.en || Object.values(benamning)[0] || info.Utbildningskod;
+    }
+    return info.Utbildningskod || 'Okänt program';
   }
 
   function normalizeGrade(raw) {
@@ -167,14 +179,20 @@
       (s) => s.Utbildningsinformation?.Utbildningskod
     );
 
-    const courseDataList = await Promise.all(programNodes.map((n) => fetchProgramCourses(n, proxyId)));
-    const rawKurser = courseDataList.flatMap((cd) => cd.Tillfallesdeltaganden || []);
-    const kurser = dedupeRetakenCourses(rawKurser);
-    const grades = await Promise.all(kurser.map((k) => fetchGradeForCourse(k, proxyId)));
+    const perProgram = await Promise.all(
+      programNodes.map(async (node) => {
+        const data = await fetchProgramCourses(node, proxyId);
+        const programKod = node.Utbildningsinformation.Utbildningskod;
+        const programName = programLabel(node);
+        return (data.Tillfallesdeltaganden || []).map((kurs) => ({ kurs, programKod, programName }));
+      })
+    );
+    const entries = dedupeRetakenEntries(perProgram.flat());
+    const grades = await Promise.all(entries.map((e) => fetchGradeForCourse(e.kurs, proxyId)));
 
     const courses = [];
-    for (let i = 0; i < kurser.length; i++) {
-      const kurs = kurser[i];
+    for (let i = 0; i < entries.length; i++) {
+      const { kurs, programKod, programName } = entries[i];
       const grade = normalizeGrade(grades[i].betyg);
       if (!grade) continue; // ongoing, or a code we don't recognize — skip rather than guess
 
@@ -186,21 +204,40 @@
         grade,
         date: kurs.Utbildningsinformation?.Studieperiod?.Startdatum || '',
         period: '',
+        program: programKod,
+        programName,
       });
     }
     return courses;
+  }
+
+  // Right after a fresh login (with the KTH two-factor step), Ladok's own
+  // app can take a while to make the network requests we read the session
+  // id out of — and a completely new login may briefly land on a different
+  // page than the course list before redirecting. Retry patiently for a few
+  // minutes rather than giving up silently after one short wait.
+  async function findSessionIds() {
+    const attempts = [15000, 20000, 25000, 30000];
+    for (let i = 0; i < attempts.length; i++) {
+      const studentUID = await waitForValue(STUDENT_UID_REGEX, { timeoutMs: attempts[i] });
+      const proxyId = await waitForValue(PROXY_REGEX, { timeoutMs: 2000 });
+      if (studentUID && proxyId) return { studentUID, proxyId };
+      if (i === 0) showToast('Väntar på Ladok…', true);
+    }
+    return null;
   }
 
   async function runImport() {
     if (alreadyRunning) return;
     alreadyRunning = true;
 
-    const studentUID = await waitForValue(STUDENT_UID_REGEX, { timeoutMs: 8000 });
-    const proxyId = await waitForValue(PROXY_REGEX, { timeoutMs: 8000 });
-    if (!studentUID || !proxyId) {
-      alreadyRunning = false; // page may not have made the relevant requests yet — allow a later retry
+    const ids = await findSessionIds();
+    if (!ids) {
+      showToast('⚠️ Hittade ingen aktiv Ladok-session — ladda om sidan', false);
+      alreadyRunning = false; // allow a later retry (e.g. a manual reload)
       return;
     }
+    const { studentUID, proxyId } = ids;
 
     showToast('Hämtar dina betyg…', true);
 

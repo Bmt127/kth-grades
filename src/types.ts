@@ -8,6 +8,8 @@ export interface Course {
   grade: Grade;
   date: string;
   period: string;
+  program?: string;
+  programName?: string;
 }
 
 export const GRADE_POINTS: Record<Grade, number | null> = {
