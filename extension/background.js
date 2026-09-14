@@ -18,14 +18,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     try {
-      // Stay out of the way: update the app tab in the background rather than
-      // stealing focus from whatever Ladok tab the user is currently in.
       let [tab] = await chrome.tabs.query({ url: APP_URL_PATTERNS });
       if (!tab) {
         tab = await chrome.tabs.create({ url: APP_FALLBACK_URL, active: false });
         await waitForTabComplete(tab.id);
       }
       await chrome.tabs.sendMessage(tab.id, { type: 'kth-grades-ladok-data', text: message.text });
+      // Import succeeded — take the user straight to the result.
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
       sendResponse({ ok: true });
     } catch (err) {
       sendResponse({ ok: false, error: String(err) });

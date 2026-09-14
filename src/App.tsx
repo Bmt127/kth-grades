@@ -1,4 +1,4 @@
-import { GraduationCap, Upload, Trash2 } from 'lucide-react';
+import { GraduationCap, Upload, Trash2, CheckCircle2 } from 'lucide-react';
 import { useCourses } from './useCourses';
 import { StatsCards } from './components/StatsCards';
 import { GPAChart } from './components/GPAChart';
@@ -8,8 +8,10 @@ import { AddCourseForm } from './components/AddCourseForm';
 import { FileUploader } from './components/FileUploader';
 import { GPASimulator } from './components/GPASimulator';
 import { StudyAdvisor } from './components/StudyAdvisor';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { calculateGPA } from './gpaUtils';
+import { parseLadokText } from './ladokParser';
+import { LADOK_MESSAGE_SOURCE } from './ladokBookmarklet';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -25,6 +27,34 @@ function getFirstName(name: string): string {
 function App() {
   const { courses, studentName, addCourse, importCourses, updateCourse, deleteCourse, clearAll, isEmpty } = useCourses();
   const [showImport, setShowImport] = useState(false);
+  const [ladokToast, setLadokToast] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Always listening, regardless of which screen is showing — this is what the
+  // Ladok extension (and the bookmarklet) posts into, so an import from either
+  // one lands here even if you never opened the "Import" panel.
+  useEffect(() => {
+    function handleMessage(e: MessageEvent) {
+      if (!e.data || e.data.source !== LADOK_MESSAGE_SOURCE || typeof e.data.text !== 'string') return;
+
+      const { courses: newCourses, studentName: name } = parseLadokText(e.data.text);
+      if (newCourses.length === 0) {
+        setLadokToast({ ok: false, message: 'Got data from Ladok, but found no graded courses on that page.' });
+        return;
+      }
+      importCourses(newCourses, name);
+      setLadokToast({ ok: true, message: `Imported ${newCourses.length} course${newCourses.length === 1 ? '' : 's'} from Ladok.` });
+      setShowImport(false);
+    }
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [importCourses]);
+
+  useEffect(() => {
+    if (!ladokToast) return;
+    const timer = setTimeout(() => setLadokToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [ladokToast]);
 
   if (isEmpty && courses.length === 0) {
     return (
@@ -80,6 +110,15 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {ladokToast && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium text-white shadow-lg ${
+            ladokToast.ok ? 'bg-green-600' : 'bg-red-600'
+          }`}
+        >
+          {ladokToast.ok && <CheckCircle2 size={16} />} {ladokToast.message}
+        </div>
+      )}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
