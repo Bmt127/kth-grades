@@ -6,22 +6,6 @@
 // way KTH's own "kth-ladok-gpa" widget does: read out of network requests
 // the page itself already made, never guessed or constructed.
 (function () {
-  // Runs at document_start, before the SPA has fetched anything, so this
-  // takes effect first. A completely fresh login (cold cache, straight out
-  // of a KTH two-factor redirect) makes far more network requests than a
-  // warm/cached session — enough to overflow the Performance API's default
-  // resource-timing buffer (~150-250 entries), silently dropping later
-  // entries, including the very requests we read the session id out of.
-  // Raise it generously so that never happens.
-  try {
-    performance.setResourceTimingBufferSize(2000);
-    performance.addEventListener('resourcetimingbufferfull', () => {
-      performance.setResourceTimingBufferSize(4000);
-    });
-  } catch (err) {
-    console.warn('[kth-grades] Could not raise resource timing buffer size', err);
-  }
-
   const TOAST_ID = 'kth-grades-toast';
   let alreadyRunning = false;
 
@@ -55,34 +39,25 @@
     }, 5000);
   }
 
-  const STUDENT_UID_REGEX =
-    /\/(?:studentinformation|studiedeltagande)\/internal\/(?:tillfallesdeltagande\/kurstillfallesdeltagande\/student|student)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
-  const PROXY_REGEX = /\/student\/proxy\/(\d+)\//;
-
-  function findFromPerformanceEntries(regex) {
-    const entries = performance.getEntriesByType('resource');
-    for (const entry of entries) {
-      const match = entry.name.match(regex);
-      if (match) return match[1];
-    }
-    return null;
+  // background.js watches the network directly via chrome.webRequest (no
+  // buffer limit, unlike performance.getEntriesByType, which a cold, fresh
+  // two-factor login can overflow before the requests we need ever fire)
+  // and remembers the student UID / proxy id it's seen for this tab.
+  function getSessionIdsFromBackground() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'kth-grades-get-session-ids' }, (resp) => resolve(resp || null));
+    });
   }
 
-  function waitForValue(regex, { timeoutMs = 15000, intervalMs = 500 } = {}) {
+  function waitForSessionIds({ timeoutMs = 90000, intervalMs = 1000 } = {}) {
     return new Promise((resolve) => {
-      const existing = findFromPerformanceEntries(regex);
-      if (existing) return resolve(existing);
       const start = Date.now();
-      const timer = setInterval(() => {
-        const found = findFromPerformanceEntries(regex);
-        if (found) {
-          clearInterval(timer);
-          resolve(found);
-        } else if (Date.now() - start > timeoutMs) {
-          clearInterval(timer);
-          resolve(null);
-        }
-      }, intervalMs);
+      (async function poll() {
+        const ids = await getSessionIdsFromBackground();
+        if (ids && ids.studentUID && ids.proxyId) return resolve(ids);
+        if (Date.now() - start > timeoutMs) return resolve(null);
+        setTimeout(poll, intervalMs);
+      })();
     });
   }
 
@@ -227,27 +202,12 @@
     return courses;
   }
 
-  // Right after a fresh login (with the KTH two-factor step), Ladok's own
-  // app can take a while to make the network requests we read the session
-  // id out of — and a completely new login may briefly land on a different
-  // page than the course list before redirecting. Retry patiently for a few
-  // minutes rather than giving up silently after one short wait.
-  async function findSessionIds() {
-    const attempts = [15000, 20000, 25000, 30000];
-    for (let i = 0; i < attempts.length; i++) {
-      const studentUID = await waitForValue(STUDENT_UID_REGEX, { timeoutMs: attempts[i] });
-      const proxyId = await waitForValue(PROXY_REGEX, { timeoutMs: 2000 });
-      if (studentUID && proxyId) return { studentUID, proxyId };
-      if (i === 0) showToast('Väntar på Ladok…', true);
-    }
-    return null;
-  }
-
   async function runImport() {
     if (alreadyRunning) return;
     alreadyRunning = true;
 
-    const ids = await findSessionIds();
+    showToast('Väntar på Ladok…', true);
+    const ids = await waitForSessionIds();
     if (!ids) {
       showToast('⚠️ Hittade ingen aktiv Ladok-session — ladda om sidan', false);
       alreadyRunning = false; // allow a later retry (e.g. a manual reload)
@@ -276,7 +236,15 @@
     }
   }
 
-  // Give the page a moment to make its own API calls (which is how we
-  // discover the student UID / proxy id) before we look for them.
-  setTimeout(runImport, 1500);
+  // Runs at document_start so background.js's webRequest listener is
+  // guaranteed to already be watching before the page's own requests start —
+  // but that means document.body may not exist yet, so wait for it.
+  function start() {
+    setTimeout(runImport, 500);
+  }
+  if (document.body) {
+    start();
+  } else {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  }
 })();

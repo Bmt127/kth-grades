@@ -1,6 +1,38 @@
 const APP_URL_PATTERNS = ['https://bmt127.github.io/kth-grades/*', 'http://localhost:5173/*'];
 const APP_FALLBACK_URL = 'https://bmt127.github.io/kth-grades/';
 
+// Watching the network directly (instead of asking the content script to
+// scan performance.getEntriesByType, which has a limited buffer that a cold,
+// fresh two-factor login can overflow before the requests we care about ever
+// fire) so the student UID / proxy id are never missed regardless of how
+// many other requests the page makes first.
+const STUDENT_UID_REGEX =
+  /\/(?:studentinformation|studiedeltagande)\/internal\/(?:tillfallesdeltagande\/kurstillfallesdeltagande\/student|student)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const PROXY_REGEX = /\/student\/proxy\/(\d+)\//;
+
+const discoveredIds = new Map(); // tabId -> { studentUID, proxyId }
+
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.tabId < 0) return;
+    const existing = discoveredIds.get(details.tabId) || {};
+    const uidMatch = details.url.match(STUDENT_UID_REGEX);
+    const proxyMatch = details.url.match(PROXY_REGEX);
+    if (uidMatch) existing.studentUID = uidMatch[1];
+    if (proxyMatch) existing.proxyId = proxyMatch[1];
+    if (uidMatch || proxyMatch) discoveredIds.set(details.tabId, existing);
+  },
+  { urls: ['https://student.ladok.se/*', 'https://www.student.ladok.se/*'] }
+);
+
+chrome.tabs.onRemoved.addListener((tabId) => discoveredIds.delete(tabId));
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || message.type !== 'kth-grades-get-session-ids') return;
+  const tabId = sender.tab && sender.tab.id;
+  sendResponse(tabId != null ? discoveredIds.get(tabId) || null : null);
+});
+
 function waitForTabComplete(tabId) {
   return new Promise((resolve) => {
     function listener(id, info) {
